@@ -49,8 +49,18 @@
       width: 531.25, height: 687.5,
       minZoom: -1, maxZoom: 8, minNativeZoom: 0, maxNativeZoom: 6,
       default: true,
-      // 4-point alignment done on the live site (Port Gellhorn, Downtown, Key Lento, Mount Kalaga)
-      calib: { T: [0.324809, -0.035666, 144.058683, -0.137363, 0.44156, 99.276692] },
+      // Alignment done on the live site: 24 anchor places clicked on the real map.
+      calib: {
+        T: [0.26048, 0.019523, 124.25785, -0.049575, 0.396947, 81.470086],
+        pts: [
+          ['port-gellhorn', 181.53, 276.2], ['downtown', 368.99, 390.54], ['key-lento', 283.87, 543.39], ['mount-kalaga', 239.68, 150.53],
+          ['vcia', 285.5, 382.99], ['ocean-beach', 441.13, 357.25], ['hamlet', 294.56, 478.43], ['lake-leonida', 314.13, 225.93],
+          ['ambrosia', 289, 244.96], ['belville', 331.5, 286.94], ['millport', 350.75, 173.72], ['capri', 158.5, 367.71],
+          ['watson-bay', 217.63, 477.62], ['grayson', 205.5, 158.99], ['bonanza', 250.69, 110.37], ['moreau', 272, 127.46],
+          ['waning-sands', 374.75, 237.47], ['manifest-canyon', 207, 212.94], ['draper-island', 142, 214.94], ['abismo', 237, 600.83],
+          ['southwind', 176, 577.83], ['little-hardin', 394, 184.91], ['hyde-island', 296, 94.93], ['featherstone', 202, 124.93],
+        ],
+      },
     },
   ];
 

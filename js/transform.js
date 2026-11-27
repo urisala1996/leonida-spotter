@@ -85,7 +85,8 @@
   /*
    * calib: { T: [a,b,c,d,e,f], pts?: [[placeKey, X, Y], ...] }
    * places: the gazetteer (key -> [x, y, ...]) used to look up anchor keys.
-   * Returns { fwd(x, y), inv(X, Y), T, warped } or null.
+   * Returns { fwd(x, y), at(x, y, refX, refY), inv(X, Y), T, warped, folded } or null.
+   * Use `at` for placing things: it is `fwd` plus the fold guard below.
    */
   function makeTransform(calib, places) {
     if (!calib) return null;
@@ -101,6 +102,30 @@
     const affInv = (X, Y) => linInv(X - T[2], Y - T[5]);
     const tps = pairs.length >= 5 ? fitTPS(pairs) : null;
     const fwd = tps || aff;
+
+    // Fold guard. If the anchors are in a different order than on the
+    // schematic map, a smooth warp has to fold over somewhere, which would
+    // mirror pins ("east of X" ending up west of X). Where that happens, a
+    // place attaches to its nearest anchor instead and keeps its local layout
+    // with the plain affine stretch, so nothing is ever mirrored.
+    const detA = T[0] * T[4] - T[1] * T[3];
+    const jac = (x, y, h = 2) => {
+      const a = fwd(x + h, y), b = fwd(x - h, y), c = fwd(x, y + h), d = fwd(x, y - h);
+      return ((a.x - b.x) * (c.y - d.y) - (a.y - b.y) * (c.x - d.x)) / (4 * h * h);
+    };
+    const folded = (x, y) => !!tps && jac(x, y) < 0.3 * detA;
+    const nearest = (x, y) => {
+      let best = 0, bd = Infinity;
+      pairs.forEach(([[sx, sy]], i) => { const d = (x - sx) ** 2 + (y - sy) ** 2; if (d < bd) { bd = d; best = i; } });
+      return pairs[best];
+    };
+    // Position of (x, y), deciding the method at its reference place (rx, ry)
+    // so all pins around one place move together.
+    const at = (x, y, rx = x, ry = y) => {
+      if (!folded(rx, ry)) return fwd(x, y);
+      const [[sx, sy], [X, Y]] = nearest(rx, ry);
+      return { x: X + T[0] * (x - sx) + T[1] * (y - sy), y: Y + T[3] * (x - sx) + T[4] * (y - sy) };
+    };
     // The spline has no closed-form inverse: refine the affine guess.
     const inv = (X, Y) => {
       let p = affInv(X, Y);
@@ -113,7 +138,7 @@
       }
       return p;
     };
-    return { fwd, inv, T, warped: !!tps };
+    return { fwd, at, inv, T, warped: !!tps, folded };
   }
 
   const out = { solve, fitAffine, fitTPS, makeTransform };

@@ -81,6 +81,36 @@ for (const n of [4, 12]) {
   close(p.y, 390.6, 0.5, 'old calib y');
 }
 
+// Fold guard: anchors in a different order than on the schematic must never
+// mirror the layout around a place (e.g. "east of X" ending up west of X).
+{
+  const pts = keys.map((k) => [k, ...real(...places[k])]);
+  // Swap two neighbouring anchors' real positions to force a fold.
+  const a = pts.findIndex(([k]) => k === 'p8'), b = pts.findIndex(([k]) => k === 'p11');
+  [pts[a][1], pts[a][2], pts[b][1], pts[b][2]] = [pts[b][1], pts[b][2], pts[a][1], pts[a][2]];
+  const T = fitAffine(pts.map(([k, X, Y]) => [places[k], [X, Y]]));
+  const xf = makeTransform({ T, pts }, places);
+  const orient = (f, x, y) => {
+    // Signed area of a small triangle around (x, y), all positioned via the same reference.
+    const p = f(x, y, x, y), q = f(x + 10, y, x, y), r = f(x, y + 10, x, y);
+    return (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  };
+  let foldedSeen = 0;
+  for (let x = 150; x <= 850; x += 25) {
+    for (let y = 150; y <= 1300; y += 25) {
+      if (xf.folded(x, y)) foldedSeen++;
+      assert.ok(orient(xf.at, x, y) > 0, `layout mirrored at ${x},${y}`);
+    }
+  }
+  assert.ok(foldedSeen > 0, 'the swapped anchors should create a folded zone to guard');
+  // Anchors still land exactly where they were clicked.
+  for (const [k, X, Y] of pts) {
+    const p = xf.at(...places[k]);
+    close(p.x, X, 1e-6, `fold-guard anchor ${k} x`);
+    close(p.y, Y, 1e-6, `fold-guard anchor ${k} y`);
+  }
+}
+
 // Unknown place keys are ignored rather than breaking the map.
 assert.ok(makeTransform({ T: [1, 0, 0, 0, 1, 0], pts: [['nope', 1, 2]] }, places));
 

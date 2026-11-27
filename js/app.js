@@ -121,7 +121,8 @@
   // Zoom levels are tuned for a 1000-unit-wide map; other sizes shift them.
   let zBias = 0;
   const aligned = () => !!xf;
-  const proj = (x, y) => (xf ? xf.fwd(x, y) : { x, y });
+  // (rx, ry) is the item's place, so all pins around one place move together.
+  const proj = (x, y, rx = x, ry = y) => (xf ? xf.at(x, y, rx, ry) : { x, y });
   const unproj = (X, Y) => (xf ? xf.inv(X, Y) : { x: X, y: Y });
   const toLL = (p) => L.latLng(-p.y, p.x);
   const fromLL = (ll) => ({ x: Math.round(ll.lng * 100) / 100, y: Math.round(-ll.lat * 100) / 100 });
@@ -154,7 +155,8 @@
       }
     }
     const region = raw.custom ? nearestRegion(x, y) : PLACES[raw.at][4];
-    const item = { ...raw, id, base: { x, y }, region };
+    const ref = raw.custom ? { x, y } : { x: PLACES[raw.at][0], y: PLACES[raw.at][1] };
+    const item = { ...raw, id, base: { x, y }, ref, region };
     item.glyph = glyphFor(item, CAT[item.cat] || CAT.custom);
     item.haystack = [item.name, item.desc, item.sub, item.req, item.reward, placeName(item.at), CAT[item.cat]?.name, REGIONS[region]]
       .filter(Boolean).join(' ').toLowerCase();
@@ -178,7 +180,7 @@
       if (ov) return ov;
       if (item.custom && item.pos?.[store.style]) return item.pos[store.style];
       const s = store.overrides[item.id] || item.base;
-      return proj(s.x, s.y);
+      return proj(s.x, s.y, item.ref.x, item.ref.y);
     }
     return store.overrides[item.id] || item.base;
   }
@@ -834,7 +836,7 @@
       // Start from the saved points, or from where the old 4-point fit put the required anchors.
       const saved = new Map((existing.pts || []).map(([k, X, Y]) => [k, { x: X, y: Y }]));
       ANCHORS.forEach(([k], i) => {
-        const p = saved.get(k) || (i < REQUIRED ? calibGuess.fwd(PLACES[k][0], PLACES[k][1]) : null);
+        const p = saved.get(k) || (i < REQUIRED ? calibGuess.at(PLACES[k][0], PLACES[k][1]) : null);
         if (p) calibPts.push({ i, p });
       });
       while (calibPts.some((c) => c.i === calibIdx)) calibIdx++;
@@ -881,7 +883,7 @@
     $('#calibDone').hidden = calibPts.filter((c) => c.i < REQUIRED).length < REQUIRED;
     $('#calib').hidden = false;
     if (guessHint) {
-      const g = guess.fwd(PLACES[key][0], PLACES[key][1]);
+      const g = guess.at(PLACES[key][0], PLACES[key][1]);
       L.circleMarker(toLL(g), { radius: 16, color: '#ffd166', weight: 2, dashArray: '4 4', fill: false, interactive: false }).addTo(ghostLayer);
     }
   }
