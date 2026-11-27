@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "build:map": "node tools/build-map.mjs",
-    "check": "node tools/check-data.js"
+    "check": "node tools/check-data.js",
+    "test": "node tools/test-transform.js && node tools/check-data.js"
   }
 }

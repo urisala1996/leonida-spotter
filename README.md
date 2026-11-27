@@ -39,6 +39,7 @@ Everything you do is saved in your browser (localStorage, plus IndexedDB for a c
 index.html            app shell
 css/style.css         pause-menu style UI, blips, mobile bottom sheets
 js/icons.js           original blip icon set
+js/transform.js       alignment math (affine fit + thin-plate spline warp)
 js/app.js             map, index, info card, waypoints, collections, custom-map calibration, import/export
 data/places.js        gazetteer: every named place -> map coordinates, label tier, region
 data/locations.js     first data pass (234 entries) + categories + sources
@@ -47,6 +48,7 @@ data/basemaps.js      optional tiled base maps (empty until you add one you have
 assets/map-*.svg      generated base maps (night, atlas)
 tools/build-map.mjs   regenerates the base maps (npm run build:map)
 tools/check-data.js   validates the data (npm run check)
+tools/test-transform.js tests for the alignment math (npm test)
 server.js             zero-dependency static server
 ```
 
@@ -73,6 +75,14 @@ Pins you moved in the browser are in the `overrides` section of an export, keyed
 4. Commit and push. GitHub Pages picks it up automatically.
 
 Pin fixes made with **Move** are stored per map, so fixing a pin on a tiled map doesn't move it on the schematic maps.
+
+### More anchors = more accurate pins
+
+With only the 4 required anchors, the alignment is a straight stretch-and-rotate, so pins far from those 4 places can be noticeably off. **Add anchors** (Settings, while the tiled map is showing) keeps your existing points and asks for about 20 more places: the airport, Ocean Beach, Hamlet, Lake Leonida, towns and islands. A dashed ring shows where the pins currently think each place is. Click the real spot, or Skip if you're unsure, and press Done whenever you like.
+
+With 5 or more anchors the alignment becomes a smooth local warp (a thin-plate spline, in `js/transform.js`). Every anchor lands exactly where you clicked, and the pins around it are corrected too. Then **Copy alignment** and paste the line (now with `pts: [...]`) into `data/basemaps.js`.
+
+`npm test` checks the math: exact anchors, a working reverse mapping, and lower error as anchors are added.
 
 ## Using a real map image
 

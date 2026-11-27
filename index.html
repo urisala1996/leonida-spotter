@@ -73,10 +73,11 @@
         <button data-style="custom" role="radio" id="customStyleBtn" disabled>My map</button>
       </div>
       <div id="tileTools" class="tile-tools" hidden>
-        <p class="hint">Showing <b id="tileToolsName"></b>. Re-align it if the pins look shifted. Copy the alignment into <code>data/basemaps.js</code> so every visitor gets aligned pins.</p>
+        <p class="hint">Showing <b id="tileToolsName"></b>. If pins look off, <b>Add anchors</b>: click more places you know and each one corrects the pins around it. Then copy the alignment into <code>data/basemaps.js</code> so every visitor gets it.</p>
         <div class="btn-row">
-          <button class="gbtn" id="tileRealign">Re-align</button>
+          <button class="gbtn" id="tileRefine">Add anchors</button>
           <button class="gbtn" id="tileCopy">Copy alignment</button>
+          <button class="gbtn ghost" id="tileRealign">Start over</button>
         </div>
       </div>
       <label class="tick"><input type="checkbox" id="showLabels" checked /><span>Show place names</span></label>
@@ -92,6 +93,7 @@
       <p class="hint">Load a screenshot of the in-game pause map, or the official map poster you have saved. It stays in this browser and is never uploaded. You then click 4 known places so the pins line up.</p>
       <div class="btn-row">
         <button class="gbtn" id="loadMapBtn">Load image</button>
+        <button class="gbtn" id="refineBtn" hidden>Add anchors</button>
         <button class="gbtn" id="recalBtn" hidden>Re-align</button>
         <button class="gbtn ghost" id="removeMapBtn" hidden>Remove</button>
         <input type="file" id="mapFile" accept="image/*" hidden />
@@ -132,7 +134,7 @@
   <div id="coords" class="coords" aria-hidden="true"></div>
   <div id="feed" class="feed" role="status"></div>
   <div id="splash" class="splash" aria-hidden="true"><div class="splash-title"></div><div class="splash-sub"></div></div>
-  <div id="calib" class="calib" hidden><div class="calib-step"></div><div class="calib-text"></div><button class="gbtn ghost" id="calibUndo" hidden>Undo</button><button class="gbtn ghost" id="calibCancel">Cancel</button></div>
+  <div id="calib" class="calib" hidden><div class="calib-step"></div><div class="calib-text"></div><button class="gbtn ghost" id="calibUndo" hidden>Undo</button><button class="gbtn ghost" id="calibSkip" hidden>Skip</button><button class="gbtn primary" id="calibDone" hidden>Done</button><button class="gbtn ghost" id="calibCancel">Cancel</button></div>
 
   <div id="loader" class="loader">
     <svg class="loader-art" viewBox="0 0 400 220" aria-hidden="true">
@@ -172,6 +174,7 @@
   <script src="data/locations-more.js"></script>
   <script src="data/basemaps.js"></script>
   <script src="js/icons.js"></script>
+  <script src="js/transform.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

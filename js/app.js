@@ -100,54 +100,35 @@
   // ------------------------------------------------------------- base maps + coordinate spaces
   // Schematic space is the hand-drawn map (1000 x 1400). An aligned map
   // ("My map" image or a permitted tile map) has its own space, and schematic
-  // positions are carried across with an affine fit from the alignment clicks.
+  // positions are carried across from the alignment clicks (affine with 4
+  // anchors, a smooth local warp with more; see js/transform.js).
   // Coordinates run from the top-left corner (y down), which is also how tile
   // servers number their tiles, so tiles line up without any offset.
   const TILE_BASES = (window.LEONIDA_BASEMAPS || []).filter((b) =>
     b && /^[\w-]+$/.test(b.id || '') && typeof b.url === 'string' && ['{z}', '{x}', '{y}'].every((t) => b.url.includes(t)) && b.width > 0 && b.height > 0);
   const tileBase = (style = store.style) => (String(style).startsWith('tile:') ? TILE_BASES.find((b) => `tile:${b.id}` === style) || null : null);
-  const tileCalib = (b) => (b && (store.tileCalib[b.id]?.T || b.calib?.T)) || null;
+  // A tile map's alignment: this browser's own, else the one in basemaps.js.
+  const tileCalib = (b) => (b && (store.tileCalib[b.id] || b.calib)) || null;
   // First visit: start on a tile map marked `default: true` (if it is aligned).
   if (!storedStyle) {
-    const def = TILE_BASES.find((b) => b.default && b.calib?.T);
+    const def = TILE_BASES.find((b) => b.default && b.calib);
     if (def) store.style = `tile:${def.id}`;
   }
 
   let SPACE = { w: MAP.width, h: MAP.height };
-  let affine = null; // [a,b,c,d,e,f]: X = a x + b y + c, Y = d x + e y + f
+  // Current alignment ({ fwd, inv, T, warped } from js/transform.js), or null on the schematic maps.
+  let xf = null;
   // Zoom levels are tuned for a 1000-unit-wide map; other sizes shift them.
   let zBias = 0;
-  const aligned = () => !!affine;
-  const proj = (x, y) => (affine ? { x: affine[0] * x + affine[1] * y + affine[2], y: affine[3] * x + affine[4] * y + affine[5] } : { x, y });
-  const unproj = (X, Y) => {
-    if (!affine) return { x: X, y: Y };
-    const [a, b, c, d, e, f] = affine;
-    const det = a * e - b * d;
-    return { x: (e * (X - c) - b * (Y - f)) / det, y: (-d * (X - c) + a * (Y - f)) / det };
-  };
+  const aligned = () => !!xf;
+  const proj = (x, y) => (xf ? xf.fwd(x, y) : { x, y });
+  const unproj = (X, Y) => (xf ? xf.inv(X, Y) : { x: X, y: Y });
   const toLL = (p) => L.latLng(-p.y, p.x);
   const fromLL = (ll) => ({ x: Math.round(ll.lng * 100) / 100, y: Math.round(-ll.lat * 100) / 100 });
   const spaceBounds = () => L.latLngBounds([[-SPACE.h, 0], [0, SPACE.w]]);
   const mapOv = () => (store.mapOverrides[store.style] ||= {});
 
-  function solve3(M, v) {
-    const det = (m) => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
-    const D = det(M);
-    return [0, 1, 2].map((i) => det(M.map((row, r) => row.map((val, c) => (c === i ? v[r] : val)))) / D);
-  }
-  // Least-squares affine fit from schematic points to image points.
-  function fitAffine(pairs) {
-    const M = [[0, 0, 0], [0, 0, 0], [0, 0, 0]], bx = [0, 0, 0], by = [0, 0, 0];
-    for (const [[x, y], [X, Y]] of pairs) {
-      const r = [x, y, 1];
-      for (let i = 0; i < 3; i++) {
-        for (let j = 0; j < 3; j++) M[i][j] += r[i] * r[j];
-        bx[i] += r[i] * X;
-        by[i] += r[i] * Y;
-      }
-    }
-    return [...solve3(M, bx), ...solve3(M, by)];
-  }
+  const { fitAffine, makeTransform } = window.LEONIDA_TRANSFORM;
 
   // ------------------------------------------------------------- data prep
   const usedIds = new Set();
@@ -253,7 +234,8 @@
     const tb = tileBase();
     if (store.style === 'custom' && !(store.calib && customURL)) store.style = 'night';
     if (String(store.style).startsWith('tile:') && !tileCalib(tb)) store.style = 'night';
-    affine = store.style === 'custom' ? store.calib.T : tileCalib(tileBase());
+    xf = makeTransform(store.style === 'custom' ? store.calib : tileCalib(tileBase()), PLACES);
+    if (!xf && store.style !== 'night' && store.style !== 'atlas') store.style = 'night';
     overlay = baseLayer(store.style).addTo(map);
     overlay.once('load', () => { if (firstLoad) { firstLoad = false; hideLoader(); } });
     if (tileBase()?.attribution) map.addControl(attribution); else map.removeControl(attribution);
@@ -261,7 +243,7 @@
     document.body.classList.toggle('theme-night', store.style !== 'atlas');
     const bounds = spaceBounds();
     map.setMaxBounds(bounds.pad(0.2));
-    if (fit) map.fitBounds(affine ? bounds : L.latLngBounds([toLL({ x: 40, y: 40 }), toLL({ x: 960, y: 1380 })]));
+    if (fit) map.fitBounds(xf ? bounds : L.latLngBounds([toLL({ x: 40, y: 40 }), toLL({ x: 960, y: 1380 })]));
     syncZ();
     rebuildCluster();
     syncSeg('#styleSeg', 'style', store.style);
@@ -683,11 +665,13 @@
     if (tb) $('#tileToolsName').textContent = tb.name || tb.id;
   }
   $('#tileRealign').onclick = () => { const tb = tileBase(); if (tb) startCalibration({ tile: tb }); };
+  $('#tileRefine').onclick = () => { const tb = tileBase(); if (tb) startCalibration({ tile: tb }, true); };
   $('#tileCopy').onclick = () => {
     const tb = tileBase();
-    const T = tileCalib(tb);
-    if (!T) return;
-    const text = `calib: { T: [${T.map((v) => +v.toFixed(6)).join(', ')}] },`;
+    const c = tileCalib(tb);
+    if (!c?.T) return;
+    const pts = (c.pts || []).map(([k, X, Y]) => `['${k}', ${X}, ${Y}]`).join(', ');
+    const text = `calib: { T: [${c.T.map((v) => +v.toFixed(6)).join(', ')}]${pts ? `, pts: [${pts}]` : ''} },`;
     (navigator.clipboard?.writeText(text) ?? Promise.reject()).then(
       () => feed('Alignment copied', `Paste it into the "${tb.id}" entry in data/basemaps.js.`, '#4fe39a', 4500),
       () => prompt('Copy this into data/basemaps.js', text));
@@ -750,13 +734,39 @@
   });
 
   // ------------------------------------------------------------- custom map image + calibration
+  // The first 4 anchors are required; the rest are optional extras that bend
+  // the alignment locally (see js/transform.js). Spread out on purpose.
+  const REQUIRED = 4;
   const ANCHORS = [
     ['port-gellhorn', 'Port Gellhorn', 'the town centre'],
     ['downtown', 'Downtown Vice City', 'the middle of the skyscraper district'],
     ['key-lento', 'Key Lento', 'the middle of the island'],
     ['mount-kalaga', 'Mount Kalaga', 'the summit'],
+    ['vcia', 'Vice City airport', 'the middle of the runways'],
+    ['ocean-beach', 'Ocean Beach', 'the middle of the beach strip on Vice Beach'],
+    ['hamlet', 'Hamlet', 'the town centre'],
+    ['lake-leonida', 'Lake Leonida', 'the middle of the big lake'],
+    ['ambrosia', 'Ambrosia', 'the town centre'],
+    ['belville', 'Belville', 'the town centre'],
+    ['millport', 'Millport', 'the town centre'],
+    ['capri', 'Capri', 'the town centre'],
+    ['watson-bay', 'Watson Bay', 'the town centre'],
+    ['grayson', 'Grayson', 'the town centre'],
+    ['bonanza', 'Bonanza', 'the town centre'],
+    ['moreau', 'Moreau', 'the town centre'],
+    ['waning-sands', 'Waning Sands', 'the town centre'],
+    ['manifest-canyon', 'Manifest Canyon', 'the middle of the canyon'],
+    ['draper-island', 'Draper Island', 'the middle of the island'],
+    ['abismo', 'Abismo Key', 'the middle of the island'],
+    ['goose-key', 'Goose Key', 'the Mile Zero airstrip'],
+    ['southwind', 'Southwind', 'the end of the Keys road'],
+    ['little-hardin', 'Little Hardin Island', 'the middle of the island'],
+    ['hyde-island', 'Hyde Island', 'the middle of the island'],
+    ['featherstone', 'Featherstone Islands', 'the biggest island'],
   ];
-  let calibrating = false, calibPts = [], calibPrev = null, calibOverlay = null, calibSize = null;
+  // calibPts: [{ i: anchor index, p: {x, y} }]; calibIdx: the anchor being asked for
+  let calibrating = false, calibPts = [], calibIdx = 0, calibPrev = null, calibOverlay = null, calibSize = null, calibGuess = null;
+  const ghostLayer = L.layerGroup().addTo(map);
 
   async function loadCustomImage() {
     try {
@@ -770,6 +780,7 @@
     const has = !!(customURL && store.calib);
     $('#customStyleBtn').disabled = !has;
     $('#recalBtn').hidden = !customURL;
+    $('#refineBtn').hidden = !has;
     $('#removeMapBtn').hidden = !customURL;
   }
   $('#loadMapBtn').onclick = () => $('#mapFile').click();
@@ -785,6 +796,7 @@
     } catch (err) { feed('Could not load image', err.message, '#ff5a4e', 4000); }
   });
   $('#recalBtn').onclick = () => startCalibration({ image: true });
+  $('#refineBtn').onclick = () => startCalibration({ image: true }, true);
   $('#removeMapBtn').onclick = async () => {
     if (!confirm('Remove your map image and its alignment from this browser?')) return;
     try { await idb.del('basemap'); } catch { /* ignore */ }
@@ -799,20 +811,34 @@
     feed('Map image removed');
   };
 
-  // target: { image: true } for "My map", or { tile: <entry from basemaps.js> }
+  // target: { image: true } for "My map", or { tile: <entry from basemaps.js> }.
+  // refine: keep the current alignment's points and continue with the optional anchors.
   let calibTarget = null;
-  async function startCalibration(target) {
+  async function startCalibration(target, refine = false) {
     if (target.image) {
       const img = new Image();
       img.src = customURL;
       try { await img.decode(); } catch { feed('That file is not an image we can read', '', '#ff5a4e'); return; }
       calibSize = { w: 1000, h: Math.round((1000 * img.naturalHeight) / img.naturalWidth) };
     }
+    const existing = target.tile ? tileCalib(target.tile) : store.calib;
+    // The current alignment, used to show where it thinks each place is.
+    calibGuess = refine ? makeTransform(existing, PLACES) : null;
     if (!calibrating) calibPrev = store.style;
     calibTarget = target;
     calibrating = true;
     calibPts = [];
+    calibIdx = 0;
     calibMarks.clearLayers();
+    if (calibGuess) {
+      // Start from the saved points, or from where the old 4-point fit put the required anchors.
+      const saved = new Map((existing.pts || []).map(([k, X, Y]) => [k, { x: X, y: Y }]));
+      ANCHORS.forEach(([k], i) => {
+        const p = saved.get(k) || (i < REQUIRED ? calibGuess.fwd(PLACES[k][0], PLACES[k][1]) : null);
+        if (p) calibPts.push({ i, p });
+      });
+      while (calibPts.some((c) => c.i === calibIdx)) calibIdx++;
+    }
     select(null);
     document.body.classList.add('calibrating');
     document.body.classList.remove('panel-open');
@@ -821,48 +847,88 @@
     if (wpMarker) map.removeLayer(wpMarker);
     if (overlay) { map.removeLayer(overlay); overlay = null; }
     if (calibOverlay) map.removeLayer(calibOverlay);
-    affine = null;
+    xf = null;
     calibOverlay = baseLayer(target.tile ? `tile:${target.tile.id}` : 'custom').addTo(map);
     if (target.tile?.attribution) map.addControl(attribution); else map.removeControl(attribution);
     const b = spaceBounds();
     map.setMaxBounds(b.pad(0.2));
     map.fitBounds(b);
     syncZ();
+    drawCalibMarks();
     calibPrompt();
+  }
+  function drawCalibMarks() {
+    calibMarks.clearLayers();
+    for (const { i, p } of calibPts) {
+      L.circleMarker(toLL(p), { radius: 6, color: '#fff', weight: 2, fillColor: i < REQUIRED ? '#ff3f8e' : '#4fe39a', fillOpacity: 1, bubblingMouseEvents: true })
+        .bindTooltip(ANCHORS[i][1], { direction: 'top', offset: [0, -6], className: 'blip-tip' }).addTo(calibMarks);
+    }
   }
   function calibPrompt() {
-    const [, name, hint] = ANCHORS[calibPts.length];
-    $('#calib .calib-step').textContent = `${calibPts.length + 1}/${ANCHORS.length}`;
-    $('#calib .calib-text').innerHTML = `Click <b>${esc(name)}</b> on the ${calibTarget?.tile ? 'map' : 'image'}: ${esc(hint)}.`;
+    ghostLayer.clearLayers();
+    const [key, name, hint] = ANCHORS[calibIdx];
+    const optional = calibIdx >= REQUIRED;
+    // Where the current alignment puts this place, shown as a dashed ring.
+    const guess = calibGuess || (calibPts.length >= 3 ? makeTransform({ pts: calibPts.map(({ i, p }) => [ANCHORS[i][0], p.x, p.y]) }, PLACES) : null);
+    const guessHint = !!(guess && optional);
+    const done = calibPts.filter((c) => c.i >= REQUIRED).length;
+    $('#calib .calib-step').textContent = optional ? `+${done}` : `${calibIdx + 1}/${REQUIRED}`;
+    $('#calib .calib-text').innerHTML = optional
+      ? `Optional: <b>${esc(name)}</b>, ${esc(hint)}.${guessHint ? ' Dashed ring = current guess.' : ''}`
+      : `Click <b>${esc(name)}</b> on the ${calibTarget?.tile ? 'map' : 'image'}: ${esc(hint)}.`;
     $('#calibUndo').hidden = calibPts.length === 0;
+    $('#calibSkip').hidden = !optional;
+    $('#calibDone').hidden = calibPts.filter((c) => c.i < REQUIRED).length < REQUIRED;
     $('#calib').hidden = false;
+    if (guessHint) {
+      const g = guess.fwd(PLACES[key][0], PLACES[key][1]);
+      L.circleMarker(toLL(g), { radius: 16, color: '#ffd166', weight: 2, dashArray: '4 4', fill: false, interactive: false }).addTo(ghostLayer);
+    }
+  }
+  function nextAnchor() {
+    do calibIdx++; while (calibIdx < ANCHORS.length && calibPts.some((c) => c.i === calibIdx));
+    if (calibIdx >= ANCHORS.length) finishCalibration(); else calibPrompt();
   }
   $('#calibUndo').onclick = () => {
-    calibPts.pop();
-    const marks = calibMarks.getLayers();
-    if (marks.length) calibMarks.removeLayer(marks[marks.length - 1]);
+    const last = calibPts.pop();
+    if (last) calibIdx = last.i;
+    drawCalibMarks();
     calibPrompt();
   };
+  $('#calibSkip').onclick = () => nextAnchor();
+  $('#calibDone').onclick = () => finishCalibration();
   function calibClick(p) {
-    calibPts.push(p);
-    L.circleMarker(toLL(p), { radius: 7, color: '#fff', weight: 2, fillColor: '#ff3f8e', fillOpacity: 1 }).addTo(calibMarks);
-    if (calibPts.length < ANCHORS.length) { calibPrompt(); return; }
-    const pairs = ANCHORS.map(([k], i) => [[PLACES[k][0], PLACES[k][1]], [calibPts[i].x, calibPts[i].y]]);
-    const T = fitAffine(pairs);
+    calibPts = calibPts.filter((c) => c.i !== calibIdx);
+    calibPts.push({ i: calibIdx, p });
+    drawCalibMarks();
+    if (calibIdx < REQUIRED) {
+      // Required anchors go in order; after the 4th, move on to the optional ones.
+      do calibIdx++; while (calibIdx < REQUIRED && calibPts.some((c) => c.i === calibIdx));
+      if (calibIdx >= REQUIRED) calibIdx = REQUIRED - 1, nextAnchor(); else calibPrompt();
+      return;
+    }
+    nextAnchor();
+  }
+  function finishCalibration() {
+    const pts = calibPts.sort((a, b) => a.i - b.i).map(({ i, p }) => [ANCHORS[i][0], +p.x.toFixed(2), +p.y.toFixed(2)]);
+    const T = fitAffine(pts.map(([k, X, Y]) => [[PLACES[k][0], PLACES[k][1]], [X, Y]]));
+    if (!T) { feed('Alignment failed', 'The points are too close together. Try again.', '#ff5a4e', 4000); return; }
+    const calib = { T: T.map((v) => +v.toFixed(6)), pts };
     const wasTile = !!calibTarget.tile;
     if (wasTile) {
-      store.tileCalib[calibTarget.tile.id] = { T };
+      store.tileCalib[calibTarget.tile.id] = calib;
       store.style = `tile:${calibTarget.tile.id}`;
     } else {
-      store.calib = { T, h: calibSize.h };
+      store.calib = { ...calib, h: calibSize.h };
       store.style = 'custom';
     }
     delete store.mapOverrides[store.style];
     save();
     endCalibration();
-    feed('Map aligned', wasTile
-      ? 'Pins are carried over from the schematic map. Settings > Copy alignment gives you the line for data/basemaps.js.'
-      : 'Pins are carried over from the schematic map. Use Move on any pin to fine-tune it.', '#4fe39a', 5500);
+    const extra = pts.length - REQUIRED;
+    feed('Map aligned', `${pts.length} anchor points${extra > 0 ? ` (${extra} extra)` : ''}. ` + (wasTile
+      ? 'Settings > Copy alignment gives you the line for data/basemaps.js.'
+      : 'Use Move on any pin to fine-tune it.'), '#4fe39a', 5500);
   }
   const calibMarks = L.layerGroup().addTo(map);
   function endCalibration(cancelled = false) {
@@ -873,6 +939,8 @@
     if (calibOverlay) { map.removeLayer(calibOverlay); calibOverlay = null; }
     if (cancelled) store.style = calibPrev;
     calibTarget = null;
+    calibGuess = null;
+    ghostLayer.clearLayers();
     syncCustomButtons();
     setBase(true);
   }

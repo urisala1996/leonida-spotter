@@ -365,9 +365,9 @@ dialog textarea { resize: vertical; }
   .fab-add { bottom: 16px; margin: 0; }
   .leaflet-control-zoom { margin-bottom: 76px !important; }
   .splash-title { font-size: 42px; }
-  .calib { top: auto; bottom: 76px; left: 12px; right: 12px; transform: none; padding: 8px 10px; gap: 10px; }
+  .calib { top: auto; bottom: 76px; left: 12px; right: 12px; transform: none; padding: 8px 10px; gap: 6px 10px; flex-wrap: wrap; }
   .calib-step { font-size: 20px; }
-  .calib-text { font-size: 12.5px; flex: 1; }
+  .calib-text { font-size: 12.5px; flex: 1 1 calc(100% - 50px); line-height: 1.35; }
   .calib-text b { font-size: 14px; }
   .calib .gbtn { padding: 6px 9px; font-size: 12px; }
 }
