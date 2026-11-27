@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Leonida Spotter</title>
+  <meta name="description" content="Unofficial interactive GTA VI map of collectible cards, hidden cars, treasures, meteorites, WAiNK scans, easter eggs and secret quests across Leonida." />
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,500;0,600;0,700;0,800;1,700;1,800;1,900&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body class="theme-night">
+  <div id="map" aria-label="Map of Leonida"></div>
+  <div class="vignette" aria-hidden="true"></div>
+
+  <!-- Top bar: title, tabs, completion -->
+  <header class="topbar">
+    <div class="wordmark" aria-label="Leonida Spotter">
+      <span class="wm-1">Leonida</span><span class="wm-2">Spotter</span>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button role="tab" data-tab="map" aria-selected="true"><kbd>1</kbd>Map</button>
+      <button role="tab" data-tab="collections" aria-selected="false"><kbd>2</kbd>Collections</button>
+      <button role="tab" data-tab="settings" aria-selected="false"><kbd>3</kbd>Settings</button>
+    </nav>
+    <div class="completion" title="Overall completion">
+      <div class="comp-pct" id="compPct">0.0%</div>
+      <div class="comp-sub" id="compSub">0 / 0 found</div>
+    </div>
+  </header>
+
+  <!-- Left panel: tab content -->
+  <aside id="panel" class="panel" aria-label="Map index">
+    <button class="panel-close only-mobile" id="panelClose" aria-label="Close">&times;</button>
+
+    <section class="tabpane" data-pane="map">
+      <label class="search">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+        <input id="search" type="search" placeholder="Search" autocomplete="off" aria-label="Search locations" />
+        <kbd>/</kbd>
+      </label>
+      <div class="row">
+        <select id="region" aria-label="Region"><option value="">All of Leonida</option></select>
+      </div>
+      <div class="row toggles">
+        <label class="tick"><input type="checkbox" id="hideFound" /><span>Hide found</span></label>
+        <span class="spacer"></span>
+        <button class="link-btn" id="catAll">Show all</button>
+        <button class="link-btn" id="catNone">Hide all</button>
+      </div>
+      <h2 class="pane-title">Index</h2>
+      <ul id="legend" class="legend"></ul>
+      <details class="results" id="resultsBox">
+        <summary><span>Locations</span> <span id="resultCount" class="muted"></span></summary>
+        <ul id="resultList"></ul>
+      </details>
+    </section>
+
+    <section class="tabpane" data-pane="collections" hidden>
+      <h2 class="pane-title">Collections</h2>
+      <div id="collections"></div>
+    </section>
+
+    <section class="tabpane" data-pane="settings" hidden>
+      <h2 class="pane-title">Map style</h2>
+      <div class="seg" id="styleSeg" role="radiogroup" aria-label="Map style">
+        <button data-style="night" role="radio">Night</button>
+        <button data-style="atlas" role="radio">Atlas</button>
+        <button data-style="custom" role="radio" id="customStyleBtn" disabled>My map</button>
+      </div>
+      <label class="tick"><input type="checkbox" id="showLabels" checked /><span>Show place names</span></label>
+
+      <h2 class="pane-title">Blip size</h2>
+      <div class="seg" id="sizeSeg" role="radiogroup" aria-label="Blip size">
+        <button data-size="s" role="radio">Small</button>
+        <button data-size="m" role="radio">Medium</button>
+        <button data-size="l" role="radio">Large</button>
+      </div>
+
+      <h2 class="pane-title">Use your own map image</h2>
+      <p class="hint">Load a screenshot of the in-game pause map, or the official map poster you have saved. It stays in this browser and is never uploaded. You then click 4 known places so the pins line up.</p>
+      <div class="btn-row">
+        <button class="gbtn" id="loadMapBtn">Load image</button>
+        <button class="gbtn" id="recalBtn" hidden>Re-align</button>
+        <button class="gbtn ghost" id="removeMapBtn" hidden>Remove</button>
+        <input type="file" id="mapFile" accept="image/*" hidden />
+      </div>
+
+      <h2 class="pane-title">Data</h2>
+      <div class="btn-row">
+        <button class="gbtn" id="exportBtn">Export</button>
+        <button class="gbtn" id="importBtn">Import</button>
+        <button class="gbtn ghost" id="resetBtn">Reset progress</button>
+        <input type="file" id="importFile" accept="application/json,.json" hidden />
+      </div>
+
+      <h2 class="pane-title">About</h2>
+      <p class="hint">A fan-made map. Pins are placed from community guide descriptions, so they show the area, not the exact spot. Every pin links to its sources. Use <b>Move</b> on a pin to fix it, or <b>Add pin</b> for something new.</p>
+      <p class="hint small">Not affiliated with or endorsed by Rockstar Games or Take-Two Interactive. Grand Theft Auto and GTA VI are trademarks of their respective owners. All icons and map art here are original.</p>
+    </section>
+  </aside>
+
+  <!-- Right: selected blip info card -->
+  <section id="info" class="info" hidden aria-live="polite"></section>
+
+  <!-- Bottom-right control hints -->
+  <footer class="hints" id="hints">
+    <span><kbd>Click</kbd>Select</span>
+    <span><kbd>W</kbd>Waypoint</span>
+    <span><kbd>F</kbd>Found</span>
+    <span><kbd>A</kbd>Add pin</span>
+    <span><kbd>Scroll</kbd>Zoom</span>
+    <span><kbd>Esc</kbd>Back</span>
+  </footer>
+
+  <button class="fab only-mobile" id="panelOpen" aria-label="Open index">
+    <svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+  </button>
+  <button class="fab fab-add" id="addPin" title="Add pin (A)" aria-label="Add pin">+</button>
+
+  <div id="coords" class="coords" aria-hidden="true"></div>
+  <div id="feed" class="feed" role="status"></div>
+  <div id="splash" class="splash" aria-hidden="true"><div class="splash-title"></div><div class="splash-sub"></div></div>
+  <div id="calib" class="calib" hidden><div class="calib-step"></div><div class="calib-text"></div><button class="gbtn ghost" id="calibUndo" hidden>Undo</button><button class="gbtn ghost" id="calibCancel">Cancel</button></div>
+
+  <div id="loader" class="loader">
+    <svg class="loader-art" viewBox="0 0 400 220" aria-hidden="true">
+      <defs>
+        <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2a1050"/><stop offset=".45" stop-color="#c2307a"/><stop offset=".8" stop-color="#ff8a4c"/><stop offset="1" stop-color="#ffd166"/></linearGradient>
+        <linearGradient id="sunG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffe08a"/><stop offset="1" stop-color="#ff5f8f"/></linearGradient>
+      </defs>
+      <rect width="400" height="220" fill="url(#sky)"/>
+      <circle cx="200" cy="150" r="70" fill="url(#sunG)"/>
+      <g fill="#2a1050"><rect y="150" width="400" height="6" opacity=".35"/><rect y="164" width="400" height="5" opacity=".45"/><rect y="176" width="400" height="4" opacity=".55"/></g>
+      <path fill="#140a2a" d="M0 220V170h18v-22h10v-18h8v18h12v-40h16v40h10v-28h14v52h10v-64h6v-10h10v10h6v74h12v-34h18v20h10v-46h20v60h14v-30h12v-24h6v24h10v44h14v-80h8v-12h8v12h8v92h16v-40h14v22h12v-50h20v72h10v-26h12v34h8V220z"/>
+      <g fill="#140a2a"><path d="M330 170c4-30 10-48 22-62-14 6-20 20-24 40-2-18-10-30-24-36 14 12 18 30 18 58z"/><path d="M52 175c3-26 8-40 18-52-12 5-17 17-20 34-2-15-9-26-21-31 12 10 15 26 15 49z"/></g>
+    </svg>
+    <div class="loader-title"><span class="wm-1">Leonida</span><span class="wm-2">Spotter</span></div>
+    <div class="loader-tip" id="loaderTip"></div>
+    <div class="loader-bar"><i></i></div>
+  </div>
+
+  <dialog id="pinDialog">
+    <form method="dialog" id="pinForm">
+      <h3>New pin</h3>
+      <p class="hint" id="pinWhere"></p>
+      <label>Name<input name="name" required maxlength="80" placeholder="e.g. Liberty City Wrath card" /></label>
+      <label>Category<select name="cat" id="pinCat"></select></label>
+      <label>Notes<textarea name="desc" rows="3" maxlength="600" placeholder="How to reach it, requirements, reward…"></textarea></label>
+      <div class="dialog-actions">
+        <button value="cancel" class="gbtn ghost" formnovalidate>Cancel</button>
+        <button value="save" class="gbtn primary">Save pin</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <script src="data/places.js"></script>
+  <script src="data/locations.js"></script>
+  <script src="data/locations-more.js"></script>
+  <script src="js/icons.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
