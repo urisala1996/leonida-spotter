@@ -17,13 +17,23 @@
 
   // ------------------------------------------------------------- storage
   const KEY = 'leonida-spotter:v1';
+  // overrides:    pin fixes on the schematic maps (shared by Night and Atlas)
+  // mapOverrides: pin fixes per aligned map, keyed by style ('custom', 'tile:<id>')
+  // tileCalib:    alignment per tiled map, keyed by tile id
   const defaults = () => ({
-    found: [], custom: [], overrides: {}, imgOverrides: {}, off: [], hideFound: false, region: '',
+    found: [], custom: [], overrides: {}, mapOverrides: {}, tileCalib: {}, off: [], hideFound: false, region: '',
     style: 'night', labels: true, size: 'm', waypoint: null, calib: null,
   });
   const store = (() => {
     try { return { ...defaults(), ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch { return defaults(); }
   })();
+  // Migrate the v1 "imgOverrides" / "img" fields to the per-map format.
+  if (store.imgOverrides) {
+    if (Object.keys(store.imgOverrides).length) store.mapOverrides.custom = { ...store.imgOverrides, ...store.mapOverrides.custom };
+    delete store.imgOverrides;
+  }
+  for (const c of store.custom) if (c.img) { c.pos = { ...c.pos, custom: c.img }; delete c.img; }
+  if (store.waypoint && store.waypoint.img) { store.waypoint.base = 'custom'; store.waypoint.pos = store.waypoint.img; delete store.waypoint.img; }
   const found = new Set(store.found);
   const catOff = new Set(store.off);
   const save = () => {
@@ -82,22 +92,33 @@
     s.classList.add('show');
   }
 
-  // ------------------------------------------------------------- coordinate spaces
-  // Schematic space is the hand-drawn map (1000 x 1400). In "My map" mode the
-  // space is the user's image scaled to 1000 wide, and schematic positions are
-  // carried across with an affine fit from the calibration clicks.
+  // ------------------------------------------------------------- base maps + coordinate spaces
+  // Schematic space is the hand-drawn map (1000 x 1400). An aligned map
+  // ("My map" image or a permitted tile map) has its own space, and schematic
+  // positions are carried across with an affine fit from the alignment clicks.
+  // Coordinates run from the top-left corner (y down), which is also how tile
+  // servers number their tiles, so tiles line up without any offset.
+  const TILE_BASES = (window.LEONIDA_BASEMAPS || []).filter((b) =>
+    b && /^[\w-]+$/.test(b.id || '') && typeof b.url === 'string' && ['{z}', '{x}', '{y}'].every((t) => b.url.includes(t)) && b.width > 0 && b.height > 0);
+  const tileBase = (style = store.style) => (String(style).startsWith('tile:') ? TILE_BASES.find((b) => `tile:${b.id}` === style) || null : null);
+  const tileCalib = (b) => (b && (store.tileCalib[b.id]?.T || b.calib?.T)) || null;
+
   let SPACE = { w: MAP.width, h: MAP.height };
   let affine = null; // [a,b,c,d,e,f]: X = a x + b y + c, Y = d x + e y + f
-  const usingImage = () => store.style === 'custom' && affine;
-  const proj = (x, y) => (usingImage() ? { x: affine[0] * x + affine[1] * y + affine[2], y: affine[3] * x + affine[4] * y + affine[5] } : { x, y });
+  // Zoom levels are tuned for a 1000-unit-wide map; other sizes shift them.
+  let zBias = 0;
+  const aligned = () => !!affine;
+  const proj = (x, y) => (affine ? { x: affine[0] * x + affine[1] * y + affine[2], y: affine[3] * x + affine[4] * y + affine[5] } : { x, y });
   const unproj = (X, Y) => {
-    if (!usingImage()) return { x: X, y: Y };
+    if (!affine) return { x: X, y: Y };
     const [a, b, c, d, e, f] = affine;
     const det = a * e - b * d;
     return { x: (e * (X - c) - b * (Y - f)) / det, y: (-d * (X - c) + a * (Y - f)) / det };
   };
-  const toLL = (p) => L.latLng(SPACE.h - p.y, p.x);
-  const fromLL = (ll) => ({ x: Math.round(ll.lng * 10) / 10, y: Math.round((SPACE.h - ll.lat) * 10) / 10 });
+  const toLL = (p) => L.latLng(-p.y, p.x);
+  const fromLL = (ll) => ({ x: Math.round(ll.lng * 100) / 100, y: Math.round(-ll.lat * 100) / 100 });
+  const spaceBounds = () => L.latLngBounds([[-SPACE.h, 0], [0, SPACE.w]]);
+  const mapOv = () => (store.mapOverrides[store.style] ||= {});
 
   function solve3(M, v) {
     const det = (m) => m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
@@ -161,9 +182,10 @@
 
   // Where an item sits in the current space.
   function posOf(item) {
-    if (usingImage()) {
-      if (store.imgOverrides[item.id]) return store.imgOverrides[item.id];
-      if (item.custom && item.img) return item.img;
+    if (aligned()) {
+      const ov = store.mapOverrides[store.style]?.[item.id];
+      if (ov) return ov;
+      if (item.custom && item.pos?.[store.style]) return item.pos[store.style];
       const s = store.overrides[item.id] || item.base;
       return proj(s.x, s.y);
     }
@@ -183,33 +205,56 @@
     attributionControl: false, maxBoundsViscosity: 0.8, wheelPxPerZoomLevel: 90, doubleClickZoom: false,
   });
   L.control.zoom({ position: 'bottomright' }).addTo(map);
+  const attribution = L.control.attribution({ prefix: false, position: 'bottomleft' });
   const mapEl = $('#map');
-  map.on('zoomend', () => { mapEl.dataset.z = String(map.getZoom()); });
+  const syncZ = () => { mapEl.dataset.z = String(map.getZoom() - zBias); };
+  map.on('zoomend', syncZ);
+
+  // Build the layer for a base map and apply its space, zoom range and credit.
+  function baseLayer(style) {
+    const tb = tileBase(style);
+    if (tb) {
+      SPACE = { w: tb.width, h: tb.height };
+      zBias = Math.round(Math.log2(1000 / SPACE.w));
+      map.setMinZoom(tb.minZoom ?? -2 + zBias);
+      map.setMaxZoom(tb.maxZoom ?? 3 + zBias);
+      const opts = {
+        tileSize: tb.tileSize || 256, noWrap: true, bounds: spaceBounds(), tms: !!tb.tms,
+        minZoom: map.getMinZoom(), maxZoom: map.getMaxZoom(), maxNativeZoom: tb.maxNativeZoom ?? map.getMaxZoom(),
+        attribution: esc(tb.attribution || tb.name),
+      };
+      if (tb.subdomains) opts.subdomains = tb.subdomains;
+      return L.tileLayer(tb.url, opts);
+    }
+    if (style === 'custom') SPACE = { w: 1000, h: store.calib?.h || calibSize?.h || 1000 };
+    else SPACE = { w: MAP.width, h: MAP.height };
+    zBias = 0;
+    map.setMinZoom(-2);
+    map.setMaxZoom(3);
+    return L.imageOverlay(style === 'custom' ? customURL : `assets/map-${style}.svg`, spaceBounds(), { interactive: false });
+  }
 
   let overlay = null;
   let customURL = null;
   let firstLoad = true;
   async function setBase(fit = true) {
     if (overlay) map.removeLayer(overlay);
+    const tb = tileBase();
     if (store.style === 'custom' && !(store.calib && customURL)) store.style = 'night';
-    affine = store.style === 'custom' ? store.calib.T : null;
-    let url;
-    if (store.style === 'custom') {
-      SPACE = { w: 1000, h: store.calib.h };
-      url = customURL;
-    } else {
-      SPACE = { w: MAP.width, h: MAP.height };
-      url = `assets/map-${store.style}.svg`;
-    }
+    if (String(store.style).startsWith('tile:') && !tileCalib(tb)) store.style = 'night';
+    affine = store.style === 'custom' ? store.calib.T : tileCalib(tileBase());
+    overlay = baseLayer(store.style).addTo(map);
+    overlay.once('load', () => { if (firstLoad) { firstLoad = false; hideLoader(); } });
+    if (tileBase()) map.addControl(attribution); else map.removeControl(attribution);
     document.body.classList.toggle('theme-atlas', store.style === 'atlas');
     document.body.classList.toggle('theme-night', store.style !== 'atlas');
-    const bounds = L.latLngBounds([[0, 0], [SPACE.h, SPACE.w]]);
-    overlay = L.imageOverlay(url, bounds, { interactive: false }).addTo(map);
-    overlay.on('load', () => { if (firstLoad) { firstLoad = false; hideLoader(); } });
+    const bounds = spaceBounds();
     map.setMaxBounds(bounds.pad(0.2));
-    if (fit) map.fitBounds(store.style === 'custom' ? bounds : L.latLngBounds([toLL({ x: 40, y: 40 }), toLL({ x: 960, y: 1380 })]));
-    mapEl.dataset.z = String(map.getZoom());
+    if (fit) map.fitBounds(affine ? bounds : L.latLngBounds([toLL({ x: 40, y: 40 }), toLL({ x: 960, y: 1380 })]));
+    syncZ();
+    rebuildCluster();
     syncSeg('#styleSeg', 'style', store.style);
+    syncTileTools();
     renderLabels();
     repositionAll();
   }
@@ -228,9 +273,19 @@
     }
   }
 
-  // Clusters, ring coloured by the categories inside.
-  const cluster = L.markerClusterGroup({
-    maxClusterRadius: 44, disableClusteringAtZoom: 2, showCoverageOnHover: false, spiderfyOnMaxZoom: true,
+  // Clusters, ring coloured by the categories inside. Rebuilt when the base map
+  // changes because the "stop clustering" zoom depends on the map's scale.
+  let cluster = null;
+  let clusterBias = null;
+  function rebuildCluster() {
+    if (cluster && clusterBias === zBias) return;
+    if (cluster) { cluster.clearLayers(); map.removeLayer(cluster); }
+    cluster = L.markerClusterGroup({ ...clusterOpts, disableClusteringAtZoom: 2 + zBias });
+    clusterBias = zBias;
+    map.addLayer(cluster);
+  }
+  const clusterOpts = {
+    maxClusterRadius: 44, showCoverageOnHover: false, spiderfyOnMaxZoom: true,
     iconCreateFunction(cl) {
       const ms = cl.getAllChildMarkers();
       const counts = {};
@@ -243,8 +298,8 @@
       });
       return L.divIcon({ className: 'cluster-wrap', html: `<div class="cluster" style="--ring:conic-gradient(${stops.join(',')})"><span>${ms.length}</span></div>`, iconSize: [40, 40] });
     },
-  });
-  map.addLayer(cluster);
+  };
+  rebuildCluster();
 
   let selectedId = null;
   const markers = new Map();
@@ -263,9 +318,9 @@
     m.on('click', () => select(item.id));
     m.on('dragend', () => {
       const p = fromLL(m.getLatLng());
-      if (usingImage()) {
-        store.imgOverrides[item.id] = p;
-        if (item.custom) syncCustom(item, { img: p, ...unproj(p.x, p.y) });
+      if (aligned()) {
+        mapOv()[item.id] = p;
+        if (item.custom) syncCustom(item, { pos: { ...item.pos, [store.style]: p }, ...unproj(p.x, p.y) });
       } else if (item.custom) {
         item.base = p;
         syncCustom(item, { x: p.x, y: p.y });
@@ -301,7 +356,7 @@
     if (wpMarker) { map.removeLayer(wpMarker); wpMarker = null; }
     if (!store.waypoint) return;
     const w = store.waypoint;
-    const pos = usingImage() && w.img ? w.img : proj(w.x, w.y);
+    const pos = w.pos && w.base === store.style ? w.pos : proj(w.x, w.y);
     wpMarker = L.marker(toLL(pos), {
       icon: L.divIcon({ className: 'waypoint', html: blipSVG('#ff3f8e', 'waypoint', 32), iconSize: [32, 32], iconAnchor: [16, 16] }),
       zIndexOffset: 3000, title: 'Waypoint (click to clear)',
@@ -315,7 +370,7 @@
     drawWaypoint();
     renderInfo();
   }
-  const waypointAt = (spacePos) => ({ ...unproj(spacePos.x, spacePos.y), img: usingImage() ? spacePos : null });
+  const waypointAt = (spacePos) => ({ ...unproj(spacePos.x, spacePos.y), base: store.style, pos: aligned() ? spacePos : null });
   map.on('contextmenu', (e) => {
     if (calibrating) return;
     const p = fromLL(e.latlng);
@@ -354,11 +409,11 @@
     const kv = [item.sub && ['Type', item.sub], item.req && ['Needs', item.req], item.reward && ['Reward', item.reward]].filter(Boolean);
     const srcs = (item.src || []).map((k) => SOURCES[k]).filter(Boolean)
       .map((s) => (s.url ? `<a href="${esc(s.url)}" target="_blank" rel="noopener noreferrer">${esc(s.label)}</a>` : esc(s.label)));
-    const moved = usingImage() ? !!store.imgOverrides[item.id] : !!store.overrides[item.id];
+    const moved = aligned() ? !!store.mapOverrides[store.style]?.[item.id] : !!store.overrides[item.id];
     const isWp = store.waypoint && store.waypoint.item === item.id;
     const accuracy = item.custom ? '' : moved ? 'You moved this pin. Its position is saved in this browser.'
       : item.conf === 'guess' ? 'Rough guess: this place is not on our map yet, so the pin is in the most likely area.'
-      : usingImage() ? 'Carried over from the schematic map, so it may be a little off on your image. Use Move to fix it.'
+      : aligned() ? 'Carried over from the schematic map, so it may be a little off on this map. Use Move to fix it.'
       : 'Approximate: placed from a written guide description, not exact in-game coordinates.';
     info.style.setProperty('--c', c.color);
     info.innerHTML = `
@@ -410,7 +465,7 @@
         break;
       }
       case 'reset':
-        delete (usingImage() ? store.imgOverrides : store.overrides)[item.id];
+        delete (aligned() ? mapOv() : store.overrides)[item.id];
         save();
         m.setLatLng(toLL(posOf(item)));
         renderInfo();
@@ -553,7 +608,7 @@
 
   function fitVisible() {
     const pts = visible.map((i) => markers.get(i.id).getLatLng());
-    if (pts.length) map.flyToBounds(L.latLngBounds(pts).pad(0.3), { maxZoom: 2, duration: 0.6 });
+    if (pts.length) map.flyToBounds(L.latLngBounds(pts).pad(0.3), { maxZoom: 2 + zBias, duration: 0.6 });
   }
 
   function isVisible(i) {
@@ -588,19 +643,44 @@
     if (!m) return;
     if (!cluster.hasLayer(m)) cluster.addLayer(m);
     document.body.classList.remove('panel-open');
-    if (map.getZoom() < 2) map.setView(m.getLatLng(), 2, { animate: false });
+    if (map.getZoom() < 2 + zBias) map.setView(m.getLatLng(), 2 + zBias, { animate: false });
     cluster.zoomToShowLayer(m, () => { map.panTo(m.getLatLng()); select(id); });
   }
 
   // Settings: style + blip size
   function syncSeg(sel, attr, val) { document.querySelectorAll(`${sel} [data-${attr}]`).forEach((b) => b.setAttribute('aria-checked', String(b.dataset[attr] === val))); }
+  // One button per permitted tile map from data/basemaps.js
+  for (const tb of TILE_BASES) {
+    const b = Object.assign(document.createElement('button'), { textContent: tb.name || tb.id, title: tb.attribution || '' });
+    b.dataset.style = `tile:${tb.id}`;
+    b.setAttribute('role', 'radio');
+    $('#styleSeg').append(b);
+  }
+  if (TILE_BASES.length) $('#styleSeg').classList.add('wrap');
   $('#styleSeg').addEventListener('click', (e) => {
     const b = e.target.closest('[data-style]');
     if (!b || b.disabled || b.dataset.style === store.style) return;
+    const tb = tileBase(b.dataset.style);
+    if (tb && !tileCalib(tb)) { startCalibration({ tile: tb }); return; }
     store.style = b.dataset.style;
     save();
     setBase(true);
   });
+  function syncTileTools() {
+    const tb = tileBase();
+    $('#tileTools').hidden = !tb;
+    if (tb) $('#tileToolsName').textContent = tb.name || tb.id;
+  }
+  $('#tileRealign').onclick = () => { const tb = tileBase(); if (tb) startCalibration({ tile: tb }); };
+  $('#tileCopy').onclick = () => {
+    const tb = tileBase();
+    const T = tileCalib(tb);
+    if (!T) return;
+    const text = `calib: { T: [${T.map((v) => +v.toFixed(6)).join(', ')}] },`;
+    (navigator.clipboard?.writeText(text) ?? Promise.reject()).then(
+      () => feed('Alignment copied', `Paste it into the "${tb.id}" entry in data/basemaps.js.`, '#4fe39a', 4500),
+      () => prompt('Copy this into data/basemaps.js', text));
+  };
   const applySize = () => {
     document.body.classList.remove('blips-s', 'blips-m', 'blips-l');
     document.body.classList.add(`blips-${store.size}`);
@@ -641,7 +721,7 @@
     const raw = {
       id: `my-${Date.now().toString(36)}`, cat: fd.get('cat'),
       name: String(fd.get('name')).trim() || 'My pin', desc: String(fd.get('desc')).trim(),
-      x: s.x, y: s.y, img: usingImage() ? pendingPos : null, at: nearestPlace(s.x, s.y),
+      x: s.x, y: s.y, pos: aligned() ? { [store.style]: pendingPos } : undefined, at: nearestPlace(s.x, s.y),
     };
     store.custom.push(raw);
     save();
@@ -690,17 +770,17 @@
       await idb.set('basemap', f);
       if (customURL) URL.revokeObjectURL(customURL);
       customURL = URL.createObjectURL(f);
-      startCalibration();
+      startCalibration({ image: true });
     } catch (err) { feed('Could not load image', err.message, '#ff5a4e', 4000); }
   });
-  $('#recalBtn').onclick = () => startCalibration();
+  $('#recalBtn').onclick = () => startCalibration({ image: true });
   $('#removeMapBtn').onclick = async () => {
     if (!confirm('Remove your map image and its alignment from this browser?')) return;
     try { await idb.del('basemap'); } catch { /* ignore */ }
     if (customURL) URL.revokeObjectURL(customURL);
     customURL = null;
     store.calib = null;
-    store.imgOverrides = {};
+    delete store.mapOverrides.custom;
     if (store.style === 'custom') store.style = 'night';
     save();
     syncCustomButtons();
@@ -708,33 +788,41 @@
     feed('Map image removed');
   };
 
-  async function startCalibration() {
-    const img = new Image();
-    img.src = customURL;
-    try { await img.decode(); } catch { feed('That file is not an image we can read', '', '#ff5a4e'); return; }
-    calibSize = { w: 1000, h: Math.round((1000 * img.naturalHeight) / img.naturalWidth) };
-    calibPrev = store.style;
+  // target: { image: true } for "My map", or { tile: <entry from basemaps.js> }
+  let calibTarget = null;
+  async function startCalibration(target) {
+    if (target.image) {
+      const img = new Image();
+      img.src = customURL;
+      try { await img.decode(); } catch { feed('That file is not an image we can read', '', '#ff5a4e'); return; }
+      calibSize = { w: 1000, h: Math.round((1000 * img.naturalHeight) / img.naturalWidth) };
+    }
+    if (!calibrating) calibPrev = store.style;
+    calibTarget = target;
     calibrating = true;
     calibPts = [];
+    calibMarks.clearLayers();
     select(null);
     document.body.classList.add('calibrating');
     document.body.classList.remove('panel-open');
     cluster.clearLayers();
     labelLayer.clearLayers();
     if (wpMarker) map.removeLayer(wpMarker);
-    if (overlay) map.removeLayer(overlay);
-    SPACE = { ...calibSize };
+    if (overlay) { map.removeLayer(overlay); overlay = null; }
+    if (calibOverlay) map.removeLayer(calibOverlay);
     affine = null;
-    const b = L.latLngBounds([[0, 0], [SPACE.h, SPACE.w]]);
-    calibOverlay = L.imageOverlay(customURL, b).addTo(map);
+    calibOverlay = baseLayer(target.tile ? `tile:${target.tile.id}` : 'custom').addTo(map);
+    if (target.tile) map.addControl(attribution); else map.removeControl(attribution);
+    const b = spaceBounds();
     map.setMaxBounds(b.pad(0.2));
     map.fitBounds(b);
+    syncZ();
     calibPrompt();
   }
   function calibPrompt() {
     const [, name, hint] = ANCHORS[calibPts.length];
     $('#calib .calib-step').textContent = `${calibPts.length + 1}/${ANCHORS.length}`;
-    $('#calib .calib-text').innerHTML = `Click <b>${esc(name)}</b> on your image: ${esc(hint)}.`;
+    $('#calib .calib-text').innerHTML = `Click <b>${esc(name)}</b> on the ${calibTarget?.tile ? 'map' : 'image'}: ${esc(hint)}.`;
     $('#calibUndo').hidden = calibPts.length === 0;
     $('#calib').hidden = false;
   }
@@ -749,12 +837,21 @@
     L.circleMarker(toLL(p), { radius: 7, color: '#fff', weight: 2, fillColor: '#ff3f8e', fillOpacity: 1 }).addTo(calibMarks);
     if (calibPts.length < ANCHORS.length) { calibPrompt(); return; }
     const pairs = ANCHORS.map(([k], i) => [[PLACES[k][0], PLACES[k][1]], [calibPts[i].x, calibPts[i].y]]);
-    store.calib = { T: fitAffine(pairs), h: calibSize.h };
-    store.imgOverrides = {};
-    store.style = 'custom';
+    const T = fitAffine(pairs);
+    const wasTile = !!calibTarget.tile;
+    if (wasTile) {
+      store.tileCalib[calibTarget.tile.id] = { T };
+      store.style = `tile:${calibTarget.tile.id}`;
+    } else {
+      store.calib = { T, h: calibSize.h };
+      store.style = 'custom';
+    }
+    delete store.mapOverrides[store.style];
     save();
     endCalibration();
-    feed('Map aligned', 'Pins are carried over from the schematic map. Use Move on any pin to fine-tune it.', '#4fe39a', 5000);
+    feed('Map aligned', wasTile
+      ? 'Pins are carried over from the schematic map. Settings > Copy alignment gives you the line for data/basemaps.js.'
+      : 'Pins are carried over from the schematic map. Use Move on any pin to fine-tune it.', '#4fe39a', 5500);
   }
   const calibMarks = L.layerGroup().addTo(map);
   function endCalibration(cancelled = false) {
@@ -764,6 +861,7 @@
     calibMarks.clearLayers();
     if (calibOverlay) { map.removeLayer(calibOverlay); calibOverlay = null; }
     if (cancelled) store.style = calibPrev;
+    calibTarget = null;
     syncCustomButtons();
     setBase(true);
   }
@@ -771,7 +869,7 @@
 
   // ------------------------------------------------------------- export / import / reset
   $('#exportBtn').onclick = () => {
-    const data = { app: 'leonida-spotter', version: 2, exported: new Date().toISOString(), found: [...found], overrides: store.overrides, imgOverrides: store.imgOverrides, custom: store.custom, waypoint: store.waypoint, calib: store.calib };
+    const data = { app: 'leonida-spotter', version: 3, exported: new Date().toISOString(), found: [...found], overrides: store.overrides, mapOverrides: store.mapOverrides, tileCalib: store.tileCalib, custom: store.custom, waypoint: store.waypoint, calib: store.calib };
     const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
     const a = Object.assign(document.createElement('a'), { href: url, download: `leonida-spotter-${new Date().toISOString().slice(0, 10)}.json` });
     document.body.append(a); a.click(); a.remove();
@@ -787,10 +885,16 @@
       if (d.app !== 'leonida-spotter') throw new Error('not a Leonida Spotter file');
       (d.found || []).forEach((id) => found.add(id));
       Object.assign(store.overrides, d.overrides || {});
-      Object.assign(store.imgOverrides, d.imgOverrides || {});
+      const mo = { ...(d.mapOverrides || {}) };
+      if (d.imgOverrides) mo.custom = { ...d.imgOverrides, ...mo.custom }; // v2 files
+      for (const [k, v] of Object.entries(mo)) store.mapOverrides[k] = { ...store.mapOverrides[k], ...v };
+      for (const [k, v] of Object.entries(d.tileCalib || {})) if (!store.tileCalib[k]) store.tileCalib[k] = v;
       if (d.calib && !store.calib) store.calib = d.calib;
       const have = new Set(store.custom.map((c) => c.id));
-      (d.custom || []).filter((c) => c && c.id && !have.has(c.id)).forEach((c) => store.custom.push(c));
+      (d.custom || []).filter((c) => c && c.id && !have.has(c.id)).forEach((c) => {
+        if (c.img) { c.pos = { ...c.pos, custom: c.img }; delete c.img; }
+        store.custom.push(c);
+      });
       save();
       feed('Imported', 'Reloading…', '#4fe39a');
       setTimeout(() => location.reload(), 700);

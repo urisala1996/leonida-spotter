@@ -43,6 +43,7 @@ js/app.js             map, index, info card, waypoints, collections, custom-map 
 data/places.js        gazetteer: every named place -> map coordinates, label tier, region
 data/locations.js     first data pass (234 entries) + categories + sources
 data/locations-more.js second data pass (246 entries): more cards, WAiNK scans, meteorites, secrets
+data/basemaps.js      optional tiled base maps (empty until you add one you have permission for)
 assets/map-*.svg      generated base maps (night, atlas)
 tools/build-map.mjs   regenerates the base maps (npm run build:map)
 tools/check-data.js   validates the data (npm run check)
@@ -61,6 +62,17 @@ server.js             zero-dependency static server
 3. Run `npm run check`.
 
 Pins you moved in the browser are in the `overrides` section of an export, keyed by item id. To make a fix permanent, copy those x/y values back into the data.
+
+## Adding a tiled map (with permission)
+
+`data/basemaps.js` lists optional tiled base maps, the kind made of square images loaded as you zoom. It ships empty. Add an entry **only** for tiles you're allowed to use: your own, an openly licensed set, or a map whose owner has agreed in writing. Keep the credit line they ask for in `attribution`.
+
+1. Add the entry (`id`, `name`, `url` with `{z}/{x}/{y}`, `attribution`, `width`/`height` at tile zoom 0, zoom limits). The comments in the file explain each field.
+2. Open the site, go to Settings > Map style, and pick the new button. With no alignment yet, it asks you to click Port Gellhorn, Downtown Vice City, Key Lento and Mount Kalaga.
+3. Choose **Copy alignment** and paste the `calib: { T: [...] }` line into the entry, so every visitor gets aligned pins.
+4. Commit and push. GitHub Pages picks it up automatically.
+
+Pin fixes made with **Move** are stored per map, so fixing a pin on a tiled map doesn't move it on the schematic maps.
 
 ## Using a real map image
 

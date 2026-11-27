@@ -72,6 +72,13 @@
         <button data-style="atlas" role="radio">Atlas</button>
         <button data-style="custom" role="radio" id="customStyleBtn" disabled>My map</button>
       </div>
+      <div id="tileTools" class="tile-tools" hidden>
+        <p class="hint">Showing <b id="tileToolsName"></b>. Re-align it if the pins look shifted. Copy the alignment into <code>data/basemaps.js</code> so every visitor gets aligned pins.</p>
+        <div class="btn-row">
+          <button class="gbtn" id="tileRealign">Re-align</button>
+          <button class="gbtn" id="tileCopy">Copy alignment</button>
+        </div>
+      </div>
       <label class="tick"><input type="checkbox" id="showLabels" checked /><span>Show place names</span></label>
 
       <h2 class="pane-title">Blip size</h2>
@@ -163,6 +170,7 @@
   <script src="data/places.js"></script>
   <script src="data/locations.js"></script>
   <script src="data/locations-more.js"></script>
+  <script src="data/basemaps.js"></script>
   <script src="js/icons.js"></script>
   <script src="js/app.js"></script>
 </body>
