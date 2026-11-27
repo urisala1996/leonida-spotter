@@ -39,6 +39,17 @@
 (function (root) {
   const BASEMAPS = [
     // Add permitted tile maps here.
+    {
+      // State of Leonida's GTA VI map, used with the site owners' permission.
+      id: 'sol',
+      name: 'Leonida',
+      url: 'https://map.stateofleonida.net/tiles/gtavi/day/{z}/{x}/{y}.png',
+      attribution: 'Map tiles: State of Leonida',
+      // 34000 x 44000 px at native zoom 6 -> 531.25 x 687.5 at zoom 0
+      width: 531.25, height: 687.5,
+      minZoom: -1, maxZoom: 8, minNativeZoom: 0, maxNativeZoom: 6,
+      default: true,
+    },
   ];
 
   if (typeof module !== 'undefined' && module.exports) module.exports = BASEMAPS;

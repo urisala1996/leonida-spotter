@@ -24,8 +24,13 @@
     found: [], custom: [], overrides: {}, mapOverrides: {}, tileCalib: {}, off: [], hideFound: false, region: '',
     style: 'night', labels: true, size: 'm', waypoint: null, calib: null,
   });
+  let storedStyle = false;
   const store = (() => {
-    try { return { ...defaults(), ...JSON.parse(localStorage.getItem(KEY) || '{}') }; } catch { return defaults(); }
+    try {
+      const saved = JSON.parse(localStorage.getItem(KEY) || '{}');
+      storedStyle = !!saved.style;
+      return { ...defaults(), ...saved };
+    } catch { return defaults(); }
   })();
   // Migrate the v1 "imgOverrides" / "img" fields to the per-map format.
   if (store.imgOverrides) {
@@ -102,6 +107,11 @@
     b && /^[\w-]+$/.test(b.id || '') && typeof b.url === 'string' && ['{z}', '{x}', '{y}'].every((t) => b.url.includes(t)) && b.width > 0 && b.height > 0);
   const tileBase = (style = store.style) => (String(style).startsWith('tile:') ? TILE_BASES.find((b) => `tile:${b.id}` === style) || null : null);
   const tileCalib = (b) => (b && (store.tileCalib[b.id]?.T || b.calib?.T)) || null;
+  // First visit: start on a tile map marked `default: true` (if it is aligned).
+  if (!storedStyle) {
+    const def = TILE_BASES.find((b) => b.default && b.calib?.T);
+    if (def) store.style = `tile:${def.id}`;
+  }
 
   let SPACE = { w: MAP.width, h: MAP.height };
   let affine = null; // [a,b,c,d,e,f]: X = a x + b y + c, Y = d x + e y + f
@@ -221,7 +231,8 @@
       const opts = {
         tileSize: tb.tileSize || 256, noWrap: true, bounds: spaceBounds(), tms: !!tb.tms,
         minZoom: map.getMinZoom(), maxZoom: map.getMaxZoom(), maxNativeZoom: tb.maxNativeZoom ?? map.getMaxZoom(),
-        attribution: esc(tb.attribution || tb.name),
+        minNativeZoom: tb.minNativeZoom ?? Math.max(0, map.getMinZoom()),
+        attribution: tb.attribution ? esc(tb.attribution) : '',
       };
       if (tb.subdomains) opts.subdomains = tb.subdomains;
       return L.tileLayer(tb.url, opts);
@@ -245,7 +256,7 @@
     affine = store.style === 'custom' ? store.calib.T : tileCalib(tileBase());
     overlay = baseLayer(store.style).addTo(map);
     overlay.once('load', () => { if (firstLoad) { firstLoad = false; hideLoader(); } });
-    if (tileBase()) map.addControl(attribution); else map.removeControl(attribution);
+    if (tileBase()?.attribution) map.addControl(attribution); else map.removeControl(attribution);
     document.body.classList.toggle('theme-atlas', store.style === 'atlas');
     document.body.classList.toggle('theme-night', store.style !== 'atlas');
     const bounds = spaceBounds();
@@ -812,7 +823,7 @@
     if (calibOverlay) map.removeLayer(calibOverlay);
     affine = null;
     calibOverlay = baseLayer(target.tile ? `tile:${target.tile.id}` : 'custom').addTo(map);
-    if (target.tile) map.addControl(attribution); else map.removeControl(attribution);
+    if (target.tile?.attribution) map.addControl(attribution); else map.removeControl(attribution);
     const b = spaceBounds();
     map.setMaxBounds(b.pad(0.2));
     map.fitBounds(b);
