@@ -49,6 +49,8 @@
       width: 531.25, height: 687.5,
       minZoom: -1, maxZoom: 8, minNativeZoom: 0, maxNativeZoom: 6,
       default: true,
+      // 4-point alignment done on the live site (Port Gellhorn, Downtown, Key Lento, Mount Kalaga)
+      calib: { T: [0.324809, -0.035666, 144.058683, -0.137363, 0.44156, 99.276692] },
     },
   ];
 
